@@ -64,12 +64,16 @@ func sendFile(conn net.Conn) error {
 		return err
 	}
 
+	fmt.Println(string(filenameAsBytes))
+	return nil
+
 	filename := string(filenameAsBytes[:n])
 	file, err := os.Open(filename)
 	if os.IsNotExist(err) {
-		fmt.Printf("Directory requested %s doesn't exist.\n", filename)
+		fmt.Printf("File requested %s doesn't exist.\n", filename)
 		return err
 	}
+	defer file.Close()
 
 	buf := make([]byte, 128)
 	for {
@@ -92,26 +96,41 @@ func sendFile(conn net.Conn) error {
 }
 
 func receiveFile(conn net.Conn) error {
-	buf := new(bytes.Buffer)
-	var filename string
-	var size int64
-	binary.Read(conn, binary.LittleEndian, &filename)
-	binary.Read(conn, binary.LittleEndian, &size)
-	n, err := io.CopyN(buf, conn, size)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	saveFile(filename, buf.Bytes())
-	fmt.Printf("Received %d bytes over the network\n", n)
-	return nil
-}
-
-func saveFile(filename string, buf []byte) error {
-	err := os.WriteFile(filename, buf, 0644)
+	destinationPathAsBytes := make([]byte, 1024)
+	n, err := conn.Read(destinationPathAsBytes)
 	if err != nil {
 		return err
 	}
 
+	destinationPath := string(destinationPathAsBytes[:n])
+	file, err := os.Create(destinationPath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	buf := new(bytes.Buffer)
+	for {
+		_, err := io.CopyN(buf, conn, 128)
+		fmt.Println(buf)
+		// TODO: Refatorar
+		if err != nil && err == io.EOF {
+			if err == io.EOF {
+				_, err = file.Write(buf.Bytes())
+				break
+			} else {
+				return err
+			}
+		}
+
+		_, err = file.Write(buf.Bytes())
+		if err != nil {
+			return err
+		}
+
+		buf.Reset()
+	}
+
+	fmt.Println("File successfully received!")
 	return nil
 }
