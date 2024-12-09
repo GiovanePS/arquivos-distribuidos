@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -24,32 +23,33 @@ func main() {
 	conn, err := net.Dial("tcp", ip+Port)
 	if err != nil {
 		fmt.Println(err)
-		os.Exit(1)
+		return
 	}
 
 	if isRemoteFile {
 		_, err := os.Open(destinationPath)
 		if os.IsNotExist(err) { // Verifying if the directory of destination exists.
-			fmt.Println("Directory %s doesn't exist.", destinationPath)
-			os.Exit(1)
+			fmt.Printf("Directory %s doesn't exist.\n", destinationPath)
+			return
 		}
 
-		receiveFile(conn, sourcePath, destinationPath)
+		if err = receiveFile(conn, sourcePath, destinationPath); err != nil {
+			fmt.Println(err)
+		}
+
 		return
 	}
 
-	buf, err := os.ReadFile(sourcePath)
-	if err != nil {
-		fmt.Println("File doesn't exist.")
-		os.Exit(1)
+	file, err := os.Open(sourcePath)
+	if os.IsNotExist(err) { // Verifying if the file of source exists.
+		fmt.Printf("Directory %s doesn't exist.\n", destinationPath)
+		return
 	}
 
-	idx := strings.LastIndex(sourcePath, "/") // Getting only the name of file
-	if idx != -1 {
-		sourcePath = sourcePath[idx+1:]
+	if err = sendFile(conn, file, destinationPath); err != nil {
+		fmt.Println(err)
 	}
 
-	sendFile(sourcePath, buf, len(buf))
 	return
 }
 
@@ -94,26 +94,42 @@ func getArgs() (bool, string, string, string) {
 	return false, "", "", ""
 }
 
-func sendFile(filename string, data []byte, size int) error {
-	conn, err := net.Dial("tcp", ":3000")
-	if err != nil {
-		return err
+func sendFile(conn net.Conn, file *os.File, destinationPath string) error {
+	fmt.Println("Send file")
+	var flagSendFile int32 = 1
+	binary.Write(conn, binary.LittleEndian, &flagSendFile)
+	io.WriteString(conn, destinationPath + utils.GetFilenameFromPath(file.Name()))
+
+	// Acknowledgment to start send file
+	ack := make([]byte, 1)
+	if _, err := conn.Read(ack); err != nil || ack[0] != 1 {
+		return fmt.Errorf("Failed to receive acknowledgment from server.")
 	}
 
-	io.WriteString(conn, filename)                               // Send file name
-	binary.Write(conn, binary.LittleEndian, int64(size))         // Send file size
-	n, err := io.CopyN(conn, bytes.NewReader(data), int64(size)) // Send file data
-	if err != nil {
-		return err
+	buf := make([]byte, 128)
+	for {
+		n, err := file.Read(buf)
+		if err != nil && err != io.EOF {
+			return err
+		}
+
+		if n == 0 {
+			break
+		}
+
+		if _, err := conn.Write(buf[:n]); err != nil {
+			return err
+		}
 	}
 
-	fmt.Printf("Written %d bytes over the network\n", n)
+	fmt.Printf("File sent to %s\n", conn.RemoteAddr())
 
 	return nil
 }
 
 func receiveFile(conn net.Conn, filepath string, destinationPath string) error {
-	flagReceiveFile := 0
+	fmt.Println("Receive file")
+	var flagReceiveFile int32 = 0
 	binary.Write(conn, binary.LittleEndian, &flagReceiveFile)
 	io.WriteString(conn, filepath)
 
@@ -122,25 +138,27 @@ func receiveFile(conn net.Conn, filepath string, destinationPath string) error {
 		return err
 	}
 
-	buf := new(bytes.Buffer)
+	// Acknowledgment to start receive file
+	ack := make([]byte, 1)
+	if _, err := conn.Read(ack); err != nil || ack[0] != 1 {
+		return fmt.Errorf("Failed to receive acknowledgment from server.")
+	}
+
+	buf := make([]byte, 128)
 	for {
-		_, err := io.CopyN(buf, conn, 128)
-		fmt.Print(buf)
+		n, err := conn.Read(buf)
 		if err != nil && err == io.EOF {
 			if err == io.EOF {
-				_, err = file.Write(buf.Bytes())
 				break
 			} else {
 				return err
 			}
 		}
 
-		_, err = file.Write(buf.Bytes())
+		_, err = file.Write(buf[:n])
 		if err != nil {
 			return err
 		}
-
-		buf.Reset()
 	}
 
 	fmt.Println("File successfully received!")

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -33,7 +32,7 @@ func StartDaemon() {
 
 func handleConn(conn net.Conn) {
 	defer conn.Close()
-	var flag int
+	var flag int32
 	binary.Read(conn, binary.LittleEndian, &flag)
 
 	// The flag is what the connection starter wants to.
@@ -64,12 +63,19 @@ func sendFile(conn net.Conn) error {
 		return err
 	}
 
+	// Acknowledgment to start receive file
+	ack := []byte{1}
+	if _, err := conn.Write(ack); err != nil {
+		return err
+	}
+
 	filename := string(filenameAsBytes[:n])
 	file, err := os.Open(filename)
 	if os.IsNotExist(err) {
 		fmt.Printf("Directory requested %s doesn't exist.\n", filename)
 		return err
 	}
+	defer file.Close()
 
 	buf := make([]byte, 128)
 	for {
@@ -92,26 +98,42 @@ func sendFile(conn net.Conn) error {
 }
 
 func receiveFile(conn net.Conn) error {
-	buf := new(bytes.Buffer)
-	var filename string
-	var size int64
-	binary.Read(conn, binary.LittleEndian, &filename)
-	binary.Read(conn, binary.LittleEndian, &size)
-	n, err := io.CopyN(buf, conn, size)
+	filepath := make([]byte, 1024)
+	n, err := conn.Read(filepath)
 	if err != nil {
-		log.Fatal(err)
+		return fmt.Errorf("Error reading filepath: %s")
 	}
 
-	saveFile(filename, buf.Bytes())
-	fmt.Printf("Received %d bytes over the network\n", n)
-	return nil
-}
-
-func saveFile(filename string, buf []byte) error {
-	err := os.WriteFile(filename, buf, 0644)
+	file, err := os.Create(string(filepath[:n]))
 	if err != nil {
+		return fmt.Errorf("Error on creating file: %s", err)
+	}
+
+	defer file.Close()
+
+	// Acknowledgment to start receive file
+	ack := []byte{1}
+	if _, err := conn.Write(ack); err != nil {
 		return err
 	}
 
+	buf := make([]byte, 128)
+	for {
+		n, err := conn.Read(buf)
+		if err != nil && err == io.EOF {
+			if err == io.EOF {
+				break
+			} else {
+				return err
+			}
+		}
+
+		_, err = file.Write(buf[:n])
+		if err != nil {
+			return err
+		}
+	}
+
+	fmt.Println("File successfully received!")
 	return nil
 }
