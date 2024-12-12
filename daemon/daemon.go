@@ -7,6 +7,11 @@ import (
 	"log"
 	"net"
 	"os"
+	"time"
+)
+
+const (
+	transferRate = 128
 )
 
 func main() {
@@ -60,13 +65,7 @@ func sendFile(conn net.Conn) error {
 	filenameAsBytes := make([]byte, 1024)
 	n, err := conn.Read(filenameAsBytes)
 	if err != nil {
-		return err
-	}
-
-	// Acknowledgment to start receive file
-	ack := []byte{1}
-	if _, err := conn.Write(ack); err != nil {
-		return err
+		return fmt.Errorf("Error on read filename from client: %s", err)
 	}
 
 	filename := string(filenameAsBytes[:n])
@@ -77,7 +76,20 @@ func sendFile(conn net.Conn) error {
 	}
 	defer file.Close()
 
-	buf := make([]byte, 128)
+	fileinfo, err := file.Stat()
+	if err != nil {
+		return fmt.Errorf("Error on get info about file: %s", err)
+	}
+
+	binary.Write(conn, binary.LittleEndian, fileinfo.Size())
+
+	// Acknowledgment to start receive file
+	ack := make([]byte, 1)
+	if _, err := conn.Read(ack); err != nil {
+		return err
+	}
+
+	buf := make([]byte, transferRate)
 	for {
 		n, err := file.Read(buf)
 		if err != nil && err != io.EOF {
@@ -91,6 +103,8 @@ func sendFile(conn net.Conn) error {
 		if _, err := conn.Write(buf[:n]); err != nil {
 			return err
 		}
+
+		time.Sleep(1 * time.Second)
 	}
 
 	fmt.Printf("File sent to %s\n", conn.RemoteAddr())
@@ -98,17 +112,17 @@ func sendFile(conn net.Conn) error {
 }
 
 func receiveFile(conn net.Conn) error {
-	filepath := make([]byte, 1024)
-	n, err := conn.Read(filepath)
+	filepathAsBytes := make([]byte, 1024)
+	n, err := conn.Read(filepathAsBytes)
 	if err != nil {
-		return fmt.Errorf("Error reading filepath: %s")
+		return fmt.Errorf("Error receive transfer metadata: %s")
 	}
 
-	file, err := os.Create(string(filepath[:n]))
+	filepath := string(filepathAsBytes[:n])
+	file, err := os.Create(filepath)
 	if err != nil {
 		return fmt.Errorf("Error on creating file: %s", err)
 	}
-
 	defer file.Close()
 
 	// Acknowledgment to start receive file
@@ -117,15 +131,15 @@ func receiveFile(conn net.Conn) error {
 		return err
 	}
 
-	buf := make([]byte, 128)
+	buf := make([]byte, transferRate)
 	for {
 		n, err := conn.Read(buf)
-		if err != nil && err == io.EOF {
-			if err == io.EOF {
-				break
-			} else {
-				return err
-			}
+		if err != nil && err != io.EOF {
+			return err
+		}
+
+		if n == 0 {
+			break
 		}
 
 		_, err = file.Write(buf[:n])

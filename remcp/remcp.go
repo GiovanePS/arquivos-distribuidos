@@ -7,10 +7,12 @@ import (
 	"net"
 	"os"
 	"remcp/utils"
-	"strings"
 )
 
-const Port = ":3000"
+const (
+	Port         = ":3000"
+	transferRate = 128
+)
 
 func main() {
 	if len(os.Args) != 3 {
@@ -18,7 +20,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	isRemoteFile, ip, sourcePath, destinationPath := getArgs()
+	isRemoteFile, ip, sourcePath, destinationPath := utils.GetArgs()
 
 	conn, err := net.Dial("tcp", ip+Port)
 	if err != nil {
@@ -42,7 +44,7 @@ func main() {
 
 	file, err := os.Open(sourcePath)
 	if os.IsNotExist(err) { // Verifying if the file of source exists.
-		fmt.Printf("Directory %s doesn't exist.\n", destinationPath)
+		fmt.Printf("Directory %s doesn't exist.\n", sourcePath)
 		return
 	}
 
@@ -53,52 +55,10 @@ func main() {
 	return
 }
 
-// Returns a boolean to define if the file is from remote connection or not,
-// in addition to return the IP Address, the source directory and the destiantion directory.
-func getArgs() (bool, string, string, string) {
-	arg1 := os.Args[1] // Source
-	arg2 := os.Args[2] // Destination
-
-	// If IP is on source
-	idx := strings.LastIndex(arg1, ":")
-	if idx != -1 {
-		ip := net.ParseIP(arg1[:idx])
-		if ip == nil {
-			fmt.Println("IP not found in args.")
-			os.Exit(1)
-		}
-
-		src := arg1[idx+1:]
-		dst := arg2
-		isRemoteFile := true
-		return isRemoteFile, ip.String(), src, dst
-	}
-
-	// If IP is on destination
-	idx = strings.LastIndex(arg2, ":")
-	if idx != -1 {
-		ip := net.ParseIP(arg2[:idx])
-		if ip == nil {
-			fmt.Println("IP not found in args.")
-			os.Exit(1)
-		}
-
-		src := arg1
-		dst := arg2[idx+1:]
-		isRemoteFile := false
-		return isRemoteFile, ip.String(), src, dst
-	}
-
-	fmt.Println("No IP found in args.")
-	os.Exit(1)
-	return false, "", "", ""
-}
-
 func sendFile(conn net.Conn, file *os.File, destinationPath string) error {
-	fmt.Println("Send file")
 	var flagSendFile int32 = 1
 	binary.Write(conn, binary.LittleEndian, &flagSendFile)
-	io.WriteString(conn, destinationPath + utils.GetFilenameFromPath(file.Name()))
+	conn.Write([]byte(file.Name() + "/" + destinationPath))
 
 	// Acknowledgment to start send file
 	ack := make([]byte, 1)
@@ -106,7 +66,7 @@ func sendFile(conn net.Conn, file *os.File, destinationPath string) error {
 		return fmt.Errorf("Failed to receive acknowledgment from server.")
 	}
 
-	buf := make([]byte, 128)
+	buf := make([]byte, transferRate)
 	for {
 		n, err := file.Read(buf)
 		if err != nil && err != io.EOF {
@@ -128,31 +88,42 @@ func sendFile(conn net.Conn, file *os.File, destinationPath string) error {
 }
 
 func receiveFile(conn net.Conn, filepath string, destinationPath string) error {
-	fmt.Println("Receive file")
 	var flagReceiveFile int32 = 0
 	binary.Write(conn, binary.LittleEndian, &flagReceiveFile)
-	io.WriteString(conn, filepath)
+
+	if _, err := conn.Write([]byte(filepath)); err != nil {
+		return fmt.Errorf("Error on write filename to server: %s", err)
+	}
 
 	file, err := os.Create(destinationPath + "/" + utils.GetFilenameFromPath(filepath))
 	if err != nil {
 		return err
 	}
 
+	var totalSize int64
+	binary.Read(conn, binary.LittleEndian, &totalSize)
+
 	// Acknowledgment to start receive file
-	ack := make([]byte, 1)
-	if _, err := conn.Read(ack); err != nil || ack[0] != 1 {
+	ack := []byte{1}
+	if _, err := conn.Write(ack); err != nil || ack[0] != 1 {
 		return fmt.Errorf("Failed to receive acknowledgment from server.")
 	}
 
-	buf := make([]byte, 128)
+	transfered := 0
+	buf := make([]byte, transferRate)
 	for {
 		n, err := conn.Read(buf)
-		if err != nil && err == io.EOF {
-			if err == io.EOF {
-				break
-			} else {
-				return err
-			}
+		if err != nil && err != io.EOF {
+			return err
+		}
+
+		percentage := (float64(transfered) / float64(totalSize)) * 100
+		progressBar := utils.GenerateBarProgress(percentage)
+		fmt.Print(progressBar)
+		transfered += transferRate
+
+		if n == 0 {
+			break
 		}
 
 		_, err = file.Write(buf[:n])
@@ -161,6 +132,6 @@ func receiveFile(conn net.Conn, filepath string, destinationPath string) error {
 		}
 	}
 
-	fmt.Println("File successfully received!")
+	fmt.Println("\nFile successfully received!")
 	return nil
 }
