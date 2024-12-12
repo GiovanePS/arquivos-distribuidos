@@ -7,11 +7,17 @@ import (
 	"log"
 	"net"
 	"os"
+	"sync"
 	"time"
 )
 
 const (
 	transferRate = 128
+)
+
+var (
+	currentClients      = 0
+	mutexCurrentClients sync.Mutex
 )
 
 func main() {
@@ -54,10 +60,6 @@ func handleConn(conn net.Conn) {
 		if err != nil {
 			fmt.Printf("Error on connection with %s: %s\n", conn.RemoteAddr(), err)
 		}
-	default:
-		out := fmt.Sprintln("Only supports send or receive a file.")
-		fmt.Println(out)
-		io.WriteString(conn, out)
 	}
 }
 
@@ -89,10 +91,12 @@ func sendFile(conn net.Conn) error {
 		return err
 	}
 
-	buf := make([]byte, transferRate)
+	mutexCurrentClients.Lock()
+	currentClients++
+	mutexCurrentClients.Unlock()
 	for {
-		n, err := file.Read(buf)
-		if err != nil && err != io.EOF {
+		n, err := transferFileWithRateLimit(file, conn)
+		if err != nil {
 			return err
 		}
 
@@ -100,15 +104,32 @@ func sendFile(conn net.Conn) error {
 			break
 		}
 
-		if _, err := conn.Write(buf[:n]); err != nil {
-			return err
-		}
-
 		time.Sleep(1 * time.Second)
 	}
+	mutexCurrentClients.Lock()
+	currentClients--
+	mutexCurrentClients.Unlock()
 
 	fmt.Printf("File sent to %s\n", conn.RemoteAddr())
 	return nil
+}
+
+// Function to properly send the files within the rate limit.
+func transferFileWithRateLimit(file *os.File, conn net.Conn) (int, error) {
+	mutexCurrentClients.Lock()
+	currentTransferRate := transferRate / currentClients
+	mutexCurrentClients.Unlock()
+	buf := make([]byte, currentTransferRate)
+	n, err := file.Read(buf)
+	if err != nil && err != io.EOF {
+		return n, err
+	}
+
+	if _, err := conn.Write(buf[:n]); err != nil {
+		return n, err
+	}
+
+	return n, nil
 }
 
 func receiveFile(conn net.Conn) error {

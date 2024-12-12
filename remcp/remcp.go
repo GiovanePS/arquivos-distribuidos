@@ -120,7 +120,7 @@ func receiveFile(conn net.Conn, filepath string, destinationPath string) error {
 		percentage := (float64(transfered) / float64(totalSize)) * 100
 		progressBar := utils.GenerateBarProgress(percentage)
 		fmt.Print(progressBar)
-		transfered += transferRate
+		transfered += n
 
 		if n == 0 {
 			break
