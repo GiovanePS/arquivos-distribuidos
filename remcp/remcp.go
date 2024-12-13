@@ -7,11 +7,13 @@ import (
 	"net"
 	"os"
 	"remcp/utils"
+	"time"
 )
 
 const (
 	Port         = ":3000"
 	transferRate = 128
+	maxAttemps   = 5
 )
 
 func main() {
@@ -22,10 +24,40 @@ func main() {
 
 	isRemoteFile, ip, sourcePath, destinationPath := utils.GetArgs()
 
-	conn, err := net.Dial("tcp", ip+Port)
-	if err != nil {
-		fmt.Println(err)
-		return
+	var conn net.Conn
+	var err error
+	attemp := 0
+	for {
+		attemp++
+		if attemp > maxAttemps {
+			fmt.Println("Timeout!")
+			return
+		}
+
+		conn, err = net.Dial("tcp", ip+Port)
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
+
+		ack := make([]byte, 1)
+		_, err = conn.Read(ack)
+		if err != nil {
+			fmt.Errorf("Error on read acknowledgment from server. %s", err)
+			return
+		}
+
+		if ack[0] != 1 {
+			if attemp == 1 {
+				fmt.Println("Server overloaded.")
+			}
+
+			fmt.Println("Retrying connection in 5 seconds...")
+		} else {
+			break
+		}
+
+		time.Sleep(5 * time.Second)
 	}
 
 	if isRemoteFile {

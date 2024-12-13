@@ -13,6 +13,7 @@ import (
 
 const (
 	transferRate = 128
+	maxClients   = 2
 )
 
 var (
@@ -37,11 +38,23 @@ func StartDaemon() {
 			log.Fatal(err)
 		}
 
-		go handleConn(conn) // Handle of requests
+		mutexCurrentClients.Lock()
+		if currentClients >= maxClients {
+			ack := []byte{0}
+			conn.Write(ack)
+			conn.Close()
+		} else {
+			ack := []byte{1}
+			conn.Write(ack)
+			currentClients++
+			go handleConn(conn) // Handle of requests
+		}
+		mutexCurrentClients.Unlock()
 	}
 }
 
 func handleConn(conn net.Conn) {
+	defer decrementClients() // Garantir o decremento dos clientes.
 	defer conn.Close()
 	var flag int32
 	binary.Read(conn, binary.LittleEndian, &flag)
@@ -91,9 +104,6 @@ func sendFile(conn net.Conn) error {
 		return err
 	}
 
-	mutexCurrentClients.Lock()
-	currentClients++
-	mutexCurrentClients.Unlock()
 	for {
 		n, err := transferFileWithRateLimit(file, conn)
 		if err != nil {
@@ -106,12 +116,15 @@ func sendFile(conn net.Conn) error {
 
 		time.Sleep(1 * time.Second)
 	}
-	mutexCurrentClients.Lock()
-	currentClients--
-	mutexCurrentClients.Unlock()
 
 	fmt.Printf("File sent to %s\n", conn.RemoteAddr())
 	return nil
+}
+
+func decrementClients() {
+	mutexCurrentClients.Lock()
+	currentClients--
+	mutexCurrentClients.Unlock()
 }
 
 // Function to properly send the files within the rate limit.
