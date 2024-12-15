@@ -1,0 +1,136 @@
+\documentclass{article}
+
+\usepackage[letterpaper,top=2cm,bottom=2cm,left=3cm,right=3cm,marginparwidth=1.75cm]{geometry}
+\usepackage{graphicx,subcaption,lipsum}
+\graphicspath{ {./images/} }
+\usepackage{float}
+\usepackage[colorlinks=true, allcolors=blue]{hyperref}
+\usepackage{listings}
+\usepackage{color}
+\usepackage{xparse}
+
+\definecolor{dkgreen}{rgb}{0,0.6,0}
+\definecolor{gray}{rgb}{0.5,0.5,0.5}
+\definecolor{mauve}{rgb}{0.58,0,0.82}
+
+\lstset{frame=tb,
+	language=Bash,
+	aboveskip=3mm,
+	belowskip=3mm,
+	showstringspaces=false,
+	columns=flexible,
+	basicstyle={\small\ttfamily},
+	numbers=none,
+	numberstyle=\tiny\color{gray},
+	keywordstyle=\color{blue},
+	commentstyle=\color{dkgreen},
+	stringstyle=\color{mauve},
+	breaklines=true,
+	breakatwhitespace=true,
+	tabsize=3
+}
+
+\title{
+	Arquivos distribuídos\\
+	\large Relatório de implementação do trabalho 2\\INE5645 - Programação Paralela e Distribuída.
+}
+
+\author{Giovane Pimentel de Sousa - 22202685\\
+		Guilherme Henriques do Carmo - 22201630\\
+		Isabela Vill de Aquino - 22201632
+}
+
+\begin{document}
+\maketitle
+
+\section*{Introdução}
+
+O objetivo deste trabalho é a implementação de uma aplicação cliente/servidor distribuída utilizando sockets TCP para transferência de arquivos. A aplicação
+simula operações comuns como as realizadas por comandos Unix, como `scp` e `cp`, mas com funcionalidades específicas, incluindo suporte para recomeço de
+transferências interrompidas e controle de múltiplas conexões simultâneas. Adicionalmente, buscou-se aplicar conceitos de programação paralela e distribuída
+para garantir a eficiência no processamento e atendimento de múltiplos clientes. Este relatório apresenta a arquitetura, os detalhes de implementação e as
+decisões técnicas tomadas durante o desenvolvimento do sistema.
+
+\section*{Como executar}
+
+\subsection*{Servidor}
+A compilação segue o formato básico de qualquer aplicação Go. A execução do servidor segue o formato de aplicações Unix:
+\begin{lstlisting}
+$ cd daemon && go build . # Este comando produzirá o binário remcp-serv.
+$ ./remcp-serv daemon
+\end{lstlisting}
+
+Caso queira se saber qualquer saída mostrada pelo servidor como logs, conexões, erros em curso, etc., basta executar sem a flag daemon,
+que o servidor será executado utilizando o terminal como standard output.
+
+Com a flag \textbf{daemon} o servidor será executado como um daemon, também ficando disponível para aceitar conexões de clientes.
+Como o daemon já estará sendo executado, já pode-se interrompê-lo com \lstinline{Ctrl + C}.
+
+\subsection*{Cliente}
+O cliente se comporta de maneira semelhante a comandos Unix como `scp` ou `cp`, interpretando o IP para determinar a direção da transferência. Exemplos de execução:
+\begin{lstlisting}
+$ cd remcp && go build . # Este comando produzirá o binário remcp.
+$ ./remcp 127.0.0.1:/home/gio/Downloads/teste.txt /home/gio/arquivos_distribuidos/teste
+$ ./remcp /home/gio/Downloads/teste.txt 127.0.0.1:/home/gio/arquivos_distribuidos/teste
+\end{lstlisting}
+
+
+- Caso o IP esteja no \textbf{primeiro} argumento, a transferência será \textbf{servidor => cliente}.
+
+- Caso o IP esteja no \textbf{segundo} argumento, a transferência será \textbf{cliente => servidor}.
+
+\section*{Implementação}
+
+A implementação foi realizada em Go 1.23 e explorou várias técnicas e conceitos relevantes para sistemas distribuídos, incluindo:
+
+\subsection*{Arquitetura}
+A aplicação é dividida em dois componentes principais:
+
+1. \textbf{Servidor (\textit{remcp-serv})}: Executa como um daemon, permitindo o atendimento simultâneo de múltiplos clientes, respeitando o limite máximo configurado.
+
+2. \textbf{Cliente (\textit{remcp})}: Realiza transferências de arquivos, interpretando a direção com base nos argumentos fornecidos.
+
+\subsection*{Configurações}
+As principais configurações, como número máximo de conexões simultâneas e velocidade de transferência, estão implementadas como constantes no código.
+Isso simplifica ajustes durante o desenvolvimento.
+
+\subsection*{Controle de concorrência}
+Para garantir a integridade durante a execução paralela, mutexes foram utilizados nas regiões críticas. O servidor distribui a banda disponível
+igualmente entre os clientes conectados, ajustando dinamicamente a velocidade de transferência.
+
+\subsection*{Acknowledgments (ACKs)}
+O uso de "acknowledgments" foi essencial para evitar problemas de mensagens malformadas. Sempre que uma mensagem é enviada entre cliente e servidor,
+o receptor confirma o recebimento antes de prosseguir.
+
+\subsection*{Mecanismo de retry}
+Quando o número máximo de conexões é atingido, o cliente tenta se reconectar automaticamente ao servidor. O comportamento segue esta lógica:
+
+- Até 5 tentativas são realizadas, com um intervalo de 5 segundos entre elas.
+
+- Caso o limite persista, a conexão é encerrada com um erro.
+
+\subsection*{Recomeço de transferências}
+Quando uma transferência é interrompida por qualquer circustância, elas podem ser retomadas da seguinte forma:
+
+- Arquivos parciais (\textit{.part}) são criados na pasta \textit{/tmp}, sendo ela utilizada como diretório padrão neste projeto.
+
+- Durante a inicialização de uma transferência, o cliente verifica a existência de arquivos \textit{.part} e informa ao servidor o ponto de recomeço. Assim
+o servidor só precisa enviar o restante dos dados, não o todo.
+
+\subsection*{Fluxo de transferências}
+1. \textbf{Servidor => Cliente}: O cliente recebe os dados em partes, armazenando temporariamente até concluir o download.
+
+2. \textbf{Cliente => Servidor}: A transferência ocorre de maneira direta, sem throttling ou controle adicional.
+
+\section*{Conclusões}
+
+A implementação da aplicação proposta foi uma oportunidade para consolidar conceitos importantes de programação paralela e distribuída. Durante o
+desenvolvimento, enfrentamos desafios como gerenciamento de concorrência, controle de fluxo de dados e retomada de transferências, todos solucionados
+com técnicas adequadas para sistemas distribuídos. 
+
+Apesar de não termos utilizado padrões de projeto explícitos, conseguimos implementar soluções eficientes e atender aos requisitos do trabalho.
+Como aprimoramento futuro, consideramos a modularização de funcionalidades, como throttling e mecanismos de retry, para facilitar a manutenção e
+evolução do código. No geral, o trabalho cumpriu seus objetivos, destacando-se pela aplicação prática de conceitos teóricos em um cenário realista.
+
+\end{document}
+
