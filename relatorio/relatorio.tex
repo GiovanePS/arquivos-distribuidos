@@ -64,7 +64,6 @@ Caso queira se saber qualquer saída mostrada pelo servidor como logs, conexões
 que o servidor será executado utilizando o terminal como standard output.
 
 Com a flag \textbf{daemon} o servidor será executado como um daemon, também ficando disponível para aceitar conexões de clientes.
-Como o daemon já estará sendo executado, já pode-se interrompê-lo com \lstinline{Ctrl + C}.
 
 \subsection*{Cliente}
 O cliente se comporta de maneira semelhante a comandos Unix como `scp` ou `cp`, interpretando o IP para determinar a direção da transferência. Exemplos de execução:
@@ -94,13 +93,35 @@ A aplicação é dividida em dois componentes principais:
 As principais configurações, como número máximo de conexões simultâneas e velocidade de transferência, estão implementadas como constantes no código.
 Isso simplifica ajustes durante o desenvolvimento.
 
+\begin{figure}[H]
+	\centering
+	\includegraphics{constantes.png}
+\end{figure}
+
+Sendo:
+
+- \lstinline{transferRate}: taxa transferência máxima, que eventualmente será dividida entre os clientes.
+
+- \lstinline{maxClients}: o máximo de clientes que o servidor aceita simultâneamente.
+
 \subsection*{Controle de concorrência}
 Para garantir a integridade durante a execução paralela, mutexes foram utilizados nas regiões críticas. O servidor distribui a banda disponível
 igualmente entre os clientes conectados, ajustando dinamicamente a velocidade de transferência.
 
+\begin{figure}[H]
+	\centering
+	\includegraphics[scale=0.5]{concorrencia.png}
+\end{figure}
+
 \subsection*{Acknowledgments (ACKs)}
 O uso de "acknowledgments" foi essencial para evitar problemas de mensagens malformadas. Sempre que uma mensagem é enviada entre cliente e servidor,
 o receptor confirma o recebimento antes de prosseguir.
+
+\begin{figure}[H]
+	\centering
+	\includegraphics{acks.png}
+\end{figure}
+
 
 \subsection*{Mecanismo de retry}
 Quando o número máximo de conexões é atingido, o cliente tenta se reconectar automaticamente ao servidor. O comportamento segue esta lógica:
@@ -109,28 +130,101 @@ Quando o número máximo de conexões é atingido, o cliente tenta se reconectar
 
 - Caso o limite persista, a conexão é encerrada com um erro.
 
+\begin{figure}[H]
+	\centering
+	\includegraphics[scale=0.5]{retry.png}
+\end{figure}
+
 \subsection*{Recomeço de transferências}
 Quando uma transferência é interrompida por qualquer circustância, elas podem ser retomadas da seguinte forma:
 
-- Arquivos parciais (\textit{.part}) são criados na pasta \textit{/tmp}, sendo ela utilizada como diretório padrão neste projeto.
-
 - Durante a inicialização de uma transferência, o cliente verifica a existência de arquivos \textit{.part} e informa ao servidor o ponto de recomeço. Assim
 o servidor só precisa enviar o restante dos dados, não o todo.
+
+\begin{figure}[H]
+	\centering
+	\includegraphics[scale=0.5]{part.png}
+\end{figure}
+
+- Arquivos parciais (\textit{.part}) são criados na pasta \textit{/tmp}, sendo ela utilizada como diretório padrão neste projeto. Quando a transferência
+é finalizada, o arquivo é movido para o diretório inicialmente escolhido como destino, perdendo a extensão .part do seu nome.
+
+\begin{figure}[H]
+	\centering
+	\includegraphics[scale=0.5]{move.png}
+\end{figure}
 
 \subsection*{Fluxo de transferências}
 1. \textbf{Servidor => Cliente}: O cliente recebe os dados em partes, armazenando temporariamente até concluir o download.
 
 2. \textbf{Cliente => Servidor}: A transferência ocorre de maneira direta, sem throttling ou controle adicional.
 
+\begin{figure}[H]
+	\centering
+	\includegraphics[scale=0.5]{flow-2.png}
+	\caption{Controle de fluxo do Servidor}
+\end{figure}
+
+\begin{figure}[H]
+	\centering
+	\includegraphics[scale=0.5]{flow-1.png}
+	\caption{Controle de fluxo do Cliente}
+\end{figure}
+
+\section*{Parametrizações e testes}
+
+Para validar o comportamento da aplicação em diferentes cenários, realizamos uma série de testes variando parâmetros como número máximo de conexões
+simultâneas, velocidade de transferência e tamanhos dos arquivos enviados. Esses testes tiveram como objetivo assegurar a implementação correta
+do sistema frente aos requisitos especificados.
+
+Os testes para máximo de conexões foi menor pois como, no geral, o resultado é parecido, não se viu necessário tantos testes.
+
+Foi validado como um servidor pode ficar sobrecarregado conforme muitas requisições/clientes chegam. Para resolver esse tipo de
+problema, limitações de acesso são necessárias, evitando que o servidor se sobrecarregue, que é menos prejudicial do que não responder algumas requisições de
+imediato.
+
+\begin{figure}[H]
+	\centering
+	\includegraphics[width=0.98\textwidth]{run-1.png}
+	\caption{Começo das transferências}
+\end{figure}
+
+Neste teste, configuramos o limite de conexões simultâneas no servidor para 2 clientes. Durante a execução, ao tentar estabelecer uma terceira conexão,
+o servidor retornou um \textit{acknowledgment} de erro, e o cliente aguardou antes de realizar novas tentativas. Esse comportamento observado estava
+conforme o esperado.
+
+O arquivo de envio tinha o tamanho de 1MB, sendo transferido a uma taxa de 10.000 bytes por segundo.
+
+\begin{figure}[H]
+	\centering
+	\includegraphics[width=0.98\textwidth]{run-2.png}
+	\caption{Novas tentativas do cliente 3 de se conectar}
+\end{figure}
+
+Então, a transferência do cliente 1 finalizou e o cliente 3 enfim consegue se conectar com sucesso. Durante o tempo de espera para uma nova conexão por
+parte do cliente 3 e a finalização de transferência do cliente 1, o cliente 2 obteve a banda de transferência toda para si, o que tornou, nem que seja
+por pouco tempo, a velocidade de transferência mais rápida. Porém, sua felicidade durou pouco, pois com o mecanismo de retry, logo que foi possível,
+a conexão foi estabelecidade entre o cliente 3 e o servidor, tendo agora a banda de transferência dividida entre estes dois clientes.
+
+\begin{figure}[H]
+	\centering
+	\includegraphics[width=0.98\textwidth]{run-3.png}
+	\caption{Cliente 2 finaliza e cliente 3 fica com toda a taxa de transferência}
+\end{figure}
+
+Por fim, o cliente 2 finaliza, fazendo com que a banda de transferência fique toda para do cliente 3, tornando o envio do arquivo muito mais rápido em
+comparação às outras duas transferências para o cliente 1 e o cliente 2.
+
 \section*{Conclusões}
 
-A implementação da aplicação proposta foi uma oportunidade para consolidar conceitos importantes de programação paralela e distribuída. Durante o
-desenvolvimento, enfrentamos desafios como gerenciamento de concorrência, controle de fluxo de dados e retomada de transferências, todos solucionados
-com técnicas adequadas para sistemas distribuídos. 
+A implementação da aplicação cliente/servidor proposta atendeu integralmente aos objetivos do trabalho demonstrando a viabilidade de soluções distribuídas
+para transferência de arquivos. O uso de sockets TCP, em conjunto com mecanismos como controle de concorrência e \textit{acknowledgments}, garantiu a
+robustez e a funcionalidade esperadas.
 
-Apesar de não termos utilizado padrões de projeto explícitos, conseguimos implementar soluções eficientes e atender aos requisitos do trabalho.
-Como aprimoramento futuro, consideramos a modularização de funcionalidades, como throttling e mecanismos de retry, para facilitar a manutenção e
-evolução do código. No geral, o trabalho cumpriu seus objetivos, destacando-se pela aplicação prática de conceitos teóricos em um cenário realista.
+Os desafios enfrentados ao longo do desenvolvimento estavam previstos no escopo do trabalho e foram abordados com as técnicas adequadas sugeridas. A divisão dinâmica
+de banda, a limitação de conexões e o recomeço de transferências foram funcionalidades implementadas com sucesso e validadas em diferentes cenários de teste.
+
+Embora a aplicação tenha cumprido os requisitos, melhorias futuras incluem a modularização de partes do código para facilitar manutenção e reutilização.
+No entanto, as escolhas feitas durante o desenvolvimento permitiram uma solução eficiente e funcional, alinhada aos objetivos do trabalho.
 
 \end{document}
-

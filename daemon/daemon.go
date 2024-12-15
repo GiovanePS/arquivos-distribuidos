@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	transferRate = 100000
+	transferRate = 10000
 	maxClients   = 2
 )
 
@@ -50,7 +50,8 @@ func main() {
 			return
 		}
 
-		fmt.Printf("Server started as daemon, PID: %d", cmd.Process.Pid)
+		fmt.Printf("Server started as daemon, PID: %d\n", cmd.Process.Pid)
+		return // Stops parent process
 	}
 
 	StartDaemon()
