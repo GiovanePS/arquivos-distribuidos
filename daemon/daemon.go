@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"encoding/binary"
+	"encoding/gob"
 	"fmt"
 	"io"
 	"log"
@@ -76,20 +78,34 @@ func handleConn(conn net.Conn) {
 	}
 }
 
+type FileTransfer struct {
+	Filepath   string
+	Transfered int64
+}
+
 func sendFile(conn net.Conn) error {
-	filenameAsBytes := make([]byte, 1024)
-	n, err := conn.Read(filenameAsBytes)
+	structBuffer := make([]byte, 1024)
+	n, err := conn.Read(structBuffer)
 	if err != nil {
-		return fmt.Errorf("Error on read filename from client: %s", err)
+		return err
 	}
 
-	filename := string(filenameAsBytes[:n])
-	file, err := os.Open(filename)
+	var ft FileTransfer
+	decoder := gob.NewDecoder(bytes.NewReader(structBuffer[:n]))
+	if err := decoder.Decode(&ft); err != nil {
+		return fmt.Errorf("Error on read FileTransfer struct from client: %s", err)
+	}
+
+	file, err := os.Open(ft.Filepath)
 	if os.IsNotExist(err) {
-		fmt.Printf("Directory requested %s doesn't exist.\n", filename)
+		fmt.Printf("Directory requested %s doesn't exist.\n", ft.Filepath)
 		return err
 	}
 	defer file.Close()
+
+	if _, err = file.Seek(int64(ft.Transfered), io.SeekStart); err != nil {
+		return err
+	}
 
 	fileinfo, err := file.Stat()
 	if err != nil {

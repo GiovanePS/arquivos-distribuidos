@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"encoding/binary"
+	"encoding/gob"
 	"fmt"
 	"io"
 	"net"
@@ -61,14 +63,15 @@ func main() {
 	}
 
 	if isRemoteFile {
-		_, err := os.Open(destinationPath)
+		dir, err := os.Open(destinationPath)
 		if os.IsNotExist(err) { // Verifying if the directory of destination exists.
 			fmt.Printf("Directory %s doesn't exist.\n", destinationPath)
 			return
 		}
+		dir.Close()
 
 		if err = receiveFile(conn, sourcePath, destinationPath); err != nil {
-			fmt.Println(err)
+			fmt.Printf("\n%s", err)
 		}
 
 		return
@@ -76,7 +79,7 @@ func main() {
 
 	file, err := os.Open(sourcePath)
 	if os.IsNotExist(err) { // Verifying if the file of source exists.
-		fmt.Printf("Directory %s doesn't exist.\n", sourcePath)
+		fmt.Printf("File %s doesn't exist.\n", sourcePath)
 		return
 	}
 
@@ -119,19 +122,43 @@ func sendFile(conn net.Conn, file *os.File, destinationPath string) error {
 	return nil
 }
 
+type FileTransfer struct {
+	Filepath   string
+	Transfered int64
+}
+
+// Function to receive a file from daemon server.
+//   - conn: TCP Connection;
+//   - filepath: directory in server where the file is;
+//   - destinationPath: local directory where the file will be saved;
 func receiveFile(conn net.Conn, filepath string, destinationPath string) error {
 	var flagReceiveFile int32 = 0
 	binary.Write(conn, binary.LittleEndian, &flagReceiveFile)
 
-	if _, err := conn.Write([]byte(filepath)); err != nil {
-		return fmt.Errorf("Error on write filename to server: %s", err)
-	}
-
-	file, err := os.Create(destinationPath + "/" + utils.GetFilenameFromPath(filepath))
+	file, err := getOrCreateFilePart(filepath, destinationPath)
 	if err != nil {
 		return err
 	}
 
+	n, err := file.Seek(0, io.SeekEnd) // Moving cursor to end of file
+	if err != nil {
+		return err
+	}
+
+	transfered := int(n)
+
+	ft := FileTransfer{Filepath: filepath, Transfered: n}
+	var structBuffer bytes.Buffer
+	encoder := gob.NewEncoder(&structBuffer)
+	if err = encoder.Encode(ft); err != nil {
+		return fmt.Errorf("Error on encode struct: %s", err)
+	}
+
+	if _, err = conn.Write(structBuffer.Bytes()); err != nil {
+		return fmt.Errorf("Error on send FileTransfer struct to server: %s", err)
+	}
+
+	// Get total file size to display progress bar
 	var totalSize int64
 	binary.Read(conn, binary.LittleEndian, &totalSize)
 
@@ -141,7 +168,6 @@ func receiveFile(conn net.Conn, filepath string, destinationPath string) error {
 		return fmt.Errorf("Failed to receive acknowledgment from server.")
 	}
 
-	transfered := 0
 	buf := make([]byte, transferRate)
 	for {
 		n, err := conn.Read(buf)
@@ -164,6 +190,50 @@ func receiveFile(conn net.Conn, filepath string, destinationPath string) error {
 		}
 	}
 
+	file.Close()
+	filename := utils.GetFilenameFromPath(filepath)
+	if err := moveFile("/tmp/"+filename+".part", destinationPath+filename); err != nil {
+		return err
+	}
+
 	fmt.Println("\nFile successfully received!")
+	return nil
+}
+
+func getOrCreateFilePart(filepath, destinationPath string) (*os.File, error) {
+	filename := utils.GetFilenameFromPath(filepath)
+
+	// Open file or create if it doesn't exist
+	file, err := os.OpenFile("/tmp/"+filename+".part", os.O_RDWR|os.O_CREATE, 0666)
+	if err != nil {
+		return nil, err
+	}
+
+	return file, nil
+}
+
+func moveFile(source, destination string) error {
+	sourceFile, err := os.Open(source)
+	if err != nil {
+		return err
+	}
+	defer sourceFile.Close()
+
+	destinationFile, err := os.Create(destination)
+	if err != nil {
+		return err
+	}
+	defer destinationFile.Close()
+
+	_, err = io.Copy(destinationFile, sourceFile)
+	if err != nil {
+		return err
+	}
+
+	err = os.Remove(source)
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
