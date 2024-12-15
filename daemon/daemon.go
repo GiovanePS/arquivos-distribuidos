@@ -9,7 +9,9 @@ import (
 	"log"
 	"net"
 	"os"
+	"os/exec"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -24,6 +26,33 @@ var (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "daemon" {
+		// Config to run process in daemon
+		cmd := exec.Command(os.Args[0])
+		cmd.Stdin = nil
+
+		nullFile, err := os.OpenFile("/dev/null", os.O_RDWR, 0)
+		if err != nil {
+			fmt.Println("Error on open /dev/null: %s", err)
+			return
+		}
+		defer nullFile.Close()
+
+		cmd.Stdout = nullFile
+		cmd.Stderr = nullFile
+
+		cmd.SysProcAttr = &syscall.SysProcAttr{
+			Setsid: true,
+		}
+
+		if err = cmd.Start(); err != nil {
+			fmt.Println("Error on start daemon: %s", err)
+			return
+		}
+
+		fmt.Printf("Server started as daemon, PID: %d", cmd.Process.Pid)
+	}
+
 	StartDaemon()
 }
 

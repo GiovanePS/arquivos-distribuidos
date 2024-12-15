@@ -1,3 +1,3 @@
-module remcp-daemon
+module remcp-serv
 
 go 1.23.3
