@@ -14,7 +14,7 @@ import (
 
 const (
 	Port         = ":3000"
-	transferRate = 128
+	transferRate = 100000
 	maxAttemps   = 5
 )
 
@@ -42,6 +42,7 @@ func main() {
 			return
 		}
 
+		// Acknowledgment connection from server
 		ack := make([]byte, 1)
 		_, err = conn.Read(ack)
 		if err != nil {
@@ -91,9 +92,9 @@ func main() {
 }
 
 func sendFile(conn net.Conn, file *os.File, destinationPath string) error {
-	var flagSendFile int32 = 1
-	binary.Write(conn, binary.LittleEndian, &flagSendFile)
-	conn.Write([]byte(file.Name() + "/" + destinationPath))
+	flagSendFile := []byte{1}
+	conn.Write(flagSendFile)
+	conn.Write([]byte(destinationPath + "/" + utils.GetFilenameFromPath(file.Name())))
 
 	// Acknowledgment to start send file
 	ack := make([]byte, 1)
@@ -132,8 +133,8 @@ type FileTransfer struct {
 //   - filepath: directory in server where the file is;
 //   - destinationPath: local directory where the file will be saved;
 func receiveFile(conn net.Conn, filepath string, destinationPath string) error {
-	var flagReceiveFile int32 = 0
-	binary.Write(conn, binary.LittleEndian, &flagReceiveFile)
+	flagReceiveFile := []byte{0}
+	conn.Write(flagReceiveFile)
 
 	file, err := getOrCreateFilePart(filepath, destinationPath)
 	if err != nil {
@@ -159,8 +160,9 @@ func receiveFile(conn net.Conn, filepath string, destinationPath string) error {
 	}
 
 	// Get total file size to display progress bar
-	var totalSize int64
-	binary.Read(conn, binary.LittleEndian, &totalSize)
+	totalSizeAsBytes := make([]byte, 8)
+	conn.Read(totalSizeAsBytes)
+	totalSize := binary.LittleEndian.Uint64(totalSizeAsBytes)
 
 	// Acknowledgment to start receive file
 	ack := []byte{1}

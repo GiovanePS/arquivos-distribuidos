@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	transferRate = 128
+	transferRate = 100000
 	maxClients   = 2
 )
 
@@ -58,13 +58,13 @@ func StartDaemon() {
 func handleConn(conn net.Conn) {
 	defer decrementClients() // Garantir o decremento dos clientes.
 	defer conn.Close()
-	var flag int32
-	binary.Read(conn, binary.LittleEndian, &flag)
+	flag := make([]byte, 1)
+	conn.Read(flag)
 
 	// The flag is what the connection starter wants to.
 	// If he wants to receive a file, the server will send the file.
 	// If he wants to send a file, the server will receive the file.
-	switch flag {
+	switch flag[0] {
 	case 0: // flagReceiveFile
 		err := sendFile(conn)
 		if err != nil {
@@ -107,12 +107,15 @@ func sendFile(conn net.Conn) error {
 		return err
 	}
 
-	fileinfo, err := file.Stat()
+	fileinfo, err := file.Stat() // Getting total size of file
 	if err != nil {
 		return fmt.Errorf("Error on get info about file: %s", err)
 	}
 
-	binary.Write(conn, binary.LittleEndian, fileinfo.Size())
+	size := fileinfo.Size()
+	sizeAsBytes := make([]byte, 8) // 8 bits to 64 uint
+	binary.LittleEndian.PutUint64(sizeAsBytes, uint64(size))
+	conn.Write(sizeAsBytes)
 
 	// Acknowledgment to start receive file
 	ack := make([]byte, 1)
@@ -165,7 +168,7 @@ func receiveFile(conn net.Conn) error {
 	filepathAsBytes := make([]byte, 1024)
 	n, err := conn.Read(filepathAsBytes)
 	if err != nil {
-		return fmt.Errorf("Error receive transfer metadata: %s")
+		return fmt.Errorf("Error receive filepath: %s")
 	}
 
 	filepath := string(filepathAsBytes[:n])
